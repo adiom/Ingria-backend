@@ -1,8 +1,8 @@
 <template>
   <div class="container mx-auto p-4">
     <header class="text-center my-5">
-      <h1 class="text-3xl font-bold text-gray-800">Gemini Media Analyzer (Adiom Timur)</h1>
-      <p class="lead text-gray-600 mt-2">Загрузите изображение для анализа с помощью Gemini.</p>
+      <h1 class="text-3xl font-bold text-gray-800">Canfly Ingria</h1>
+      <p class="lead text-gray-600 mt-2">Загрузите изображение для анализа с помощью Ingria.</p>
       <NuxtLink to="/analysis" class="text-blue-500 hover:underline hover:text-blue-700 mt-2 block">
         Просмотреть сохраненные анализы
       </NuxtLink>
