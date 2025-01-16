@@ -3,4 +3,4 @@ uvicorn[standard]
 google-generativeai
 python-dotenv
 supabase
-python-multipart 
+python-multipart
