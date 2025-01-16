@@ -1,4 +1,5 @@
 # INGRIA FastAPI BACKEND
+# ADD ADIOM-HASH to filenames
 
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.responses import JSONResponse
@@ -13,9 +14,12 @@ from typing import List, Optional
 import uuid
 from starlette.requests import Request
 from supabase import create_client, Client
+import re
+from transliterate import translit
+
 
 # Настройка логгера
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(асctime)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Загрузка переменных окружения
@@ -36,11 +40,34 @@ genai.configure(api_key=GOOGLE_API_KEY)
 # Выбор модели
 model = genai.GenerativeModel('gemini-1.5-flash-8b')
 
+# ...existing code...
+
 # Инициализация Supabase клиента
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
+# Создание bucket для хранения файлов
+bucket_name = "files"
+try:
+    # Проверка существования bucket
+    response = supabase.storage.get_bucket(bucket_name)
+    if response.get('statusCode') == 404:
+        # Если bucket не существует, создаем его
+        response = supabase.storage.create_bucket(bucket_name)
+        if response.get('statusCode') == 200:
+            logger.info(f"Bucket '{bucket_name}' успешно создан.")
+        else:
+            logger.info(f"Произошла ошибка при создании bucket: {response}")
+    else:
+        logger.info(f"Bucket '{bucket_name}' уже существует.")
+except Exception as e:
+    logger.error(f"Ошибка при создании bucket: {e}")
+
 # Инициализация FastAPI приложения
 app = FastAPI(title="Ingria Media Analyzer API")
+
+# ...existing code...
+
+# ...existing code...
 
 # Настройка CORS
 app.add_middleware(
@@ -80,16 +107,42 @@ def create_files_directory():
         os.makedirs(files_dir)
         logger.info(f"Директория '{files_dir}' создана.")
 
-def save_file(file: UploadFile, file_data:bytes) -> str:
-    """Сохраняет загруженный файл в директорию /files/ и возвращает путь к файлу."""
-    create_files_directory()
-    file_extension = os.path.splitext(file.filename)[1]
-    file_name = f"{uuid.uuid4()}{file_extension}"
-    file_path = os.path.join("files", file_name)
-    with open(file_path, "wb") as buffer:
-        buffer.write(file_data)
-    logger.info(f"Файл '{file.filename}' сохранен как '{file_path}'.")
-    return file_path
+
+def sanitize_filename(filename: str) -> str:
+    """Очищает имя файла от недопустимых символов и транслитерирует кириллицу."""
+    # Транслитерируем кириллицу в латиницу
+    transliterated = translit(filename, 'ru', reversed=True)
+    # Заменяем пробелы и недопустимые символы на подчеркивания
+    sanitized = re.sub(r'[^\w\-\.]', '_', transliterated)
+    # Удаляем повторяющиеся подчеркивания
+    sanitized = re.sub(r'_{2,}', '_', sanitized)
+    return sanitized
+
+def save_file(file: UploadFile, file_data: bytes) -> str:
+    """Сохраняет файл в Supabase Storage и возвращает URL."""
+    # Очищаем имя файла
+    sanitized_filename = sanitize_filename(file.filename)
+    file_name = f"{uuid.uuid4()}_{sanitized_filename}"
+    
+    try:
+        # Указываем MIME-тип файла
+        content_type = file.content_type
+
+        # Пытаемся загрузить файл с указанием MIME-типа
+        response = supabase.storage.from_(bucket_name).upload(
+            file_name, 
+            file_data, 
+            file_options={"content-type": content_type}
+        )
+        
+        # Если загрузка прошла успешно, получаем публичный URL файла
+        file_url = supabase.storage.from_(bucket_name).get_public_url(file_name)
+        logger.info(f"Файл '{file_name}' успешно сохранен в Supabase Storage. MIME-тип: {content_type}")
+        return file_url
+
+    except Exception as e:
+        logger.error(f"Ошибка при сохранении файла: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при сохранении файла: {e}")
 
 def get_or_create_user(session_id: str):
     user = supabase.table('users').select('*').eq('session_id', session_id).execute()
