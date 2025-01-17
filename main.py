@@ -40,8 +40,6 @@ genai.configure(api_key=GOOGLE_API_KEY)
 # Выбор модели
 model = genai.GenerativeModel('gemini-1.5-flash-8b')
 
-# ...existing code...
-
 # Инициализация Supabase клиента
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -64,10 +62,6 @@ except Exception as e:
 
 # Инициализация FastAPI приложения
 app = FastAPI(title="Ingria Media Analyzer API")
-
-# ...existing code...
-
-# ...existing code...
 
 # Настройка CORS
 app.add_middleware(
@@ -100,6 +94,17 @@ class AnalysisDetailsResponse(BaseModel):
     file_name: str
     file_path: str
 
+class ChatMessage(BaseModel):
+    role: str  # 'user' или 'assistant'
+    content: str
+
+class ChatResponse(BaseModel):
+    chat_id: str
+    messages: List[ChatMessage]
+
+class ChatListResponse(BaseModel):
+    chats: List[dict]
+
 def create_files_directory():
     """Создает директорию /files/ если она не существует."""
     files_dir = "files"
@@ -107,39 +112,28 @@ def create_files_directory():
         os.makedirs(files_dir)
         logger.info(f"Директория '{files_dir}' создана.")
 
-
 def sanitize_filename(filename: str) -> str:
     """Очищает имя файла от недопустимых символов и транслитерирует кириллицу."""
-    # Транслитерируем кириллицу в латиницу
     transliterated = translit(filename, 'ru', reversed=True)
-    # Заменяем пробелы и недопустимые символы на подчеркивания
     sanitized = re.sub(r'[^\w\-\.]', '_', transliterated)
-    # Удаляем повторяющиеся подчеркивания
     sanitized = re.sub(r'_{2,}', '_', sanitized)
     return sanitized
 
 def save_file(file: UploadFile, file_data: bytes) -> str:
     """Сохраняет файл в Supabase Storage и возвращает URL."""
-    # Очищаем имя файла
     sanitized_filename = sanitize_filename(file.filename)
     file_name = f"{uuid.uuid4()}_{sanitized_filename}"
     
     try:
-        # Указываем MIME-тип файла
         content_type = file.content_type
-
-        # Пытаемся загрузить файл с указанием MIME-типа
         response = supabase.storage.from_(bucket_name).upload(
             file_name, 
             file_data, 
             file_options={"content-type": content_type}
         )
-        
-        # Если загрузка прошла успешно, получаем публичный URL файла
         file_url = supabase.storage.from_(bucket_name).get_public_url(file_name)
         logger.info(f"Файл '{file_name}' успешно сохранен в Supabase Storage. MIME-тип: {content_type}")
         return file_url
-
     except Exception as e:
         logger.error(f"Ошибка при сохранении файла: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка при сохранении файла: {e}")
@@ -168,13 +162,29 @@ def get_all_analysis_records():
 def get_analysis_record_by_id(record_id: int):
     return supabase.table('analysis_results').select('*').eq('id', record_id).single().execute()
 
+def create_chat(user_id: str):
+    return supabase.table('chats').insert({
+        'user_id': user_id,
+        'created_at': datetime.now().isoformat()
+    }).execute()
+
+def save_message(chat_id: str, role: str, content: str):
+    return supabase.table('messages').insert({
+        'chat_id': chat_id,
+        'role': role,
+        'content': content,
+        'timestamp': datetime.now().isoformat()
+    }).execute()
+
+def get_chat_messages(chat_id: str):
+    return supabase.table('messages').select('*').eq('chat_id', chat_id).order('timestamp.asc').execute()
+
+def get_user_chats(user_id: str):
+    return supabase.table('chats').select('*').eq('user_id', user_id).order('created_at.desc').execute()
+
 @app.post("/analyze", response_model=AnalysisResponse)
 async def analyze_media(request: Request, file: UploadFile = File(...)):
     logger.info(f"Получен запрос к /analyze с файлом: {file.filename}, тип: {file.content_type}")
-    """
-    Анализирует загруженное изображение или аудиофайл с помощью Gemini и возвращает текстовое описание.
-    Поддерживаемые типы файлов: изображения (jpeg, png, webp), аудио (ogg).
-    """
     if not file:
         logger.warning("Файл не был загружен.")
         raise HTTPException(status_code=400, detail="Необходимо загрузить файл.")
@@ -185,10 +195,10 @@ async def analyze_media(request: Request, file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail=f"Неподдерживаемый тип файла. Разрешены: {', '.join(allowed_mime_types)}")
 
     try:
-        file_data = await file.read() # Читаем файл сейчас
+        file_data = await file.read()
         logger.info(f"Размер загруженного файла: {len(file_data)} байт")
 
-        file_path = save_file(file, file_data) #  Сохраняем файл
+        file_path = save_file(file, file_data)
 
         contents = []
         if file.content_type.startswith("image/"):
@@ -204,14 +214,12 @@ async def analyze_media(request: Request, file: UploadFile = File(...)):
                 {"mime_type": file.content_type, "data": file_data}
             ]
         else:
-            # Этого блока по идее не должно достигаться, так как проверка mime_type выше
             logger.error(f"Неизвестный тип файла после проверки: {file.content_type}")
             raise HTTPException(status_code=500, detail="Внутренняя ошибка сервера при обработке типа файла.")
 
         response = model.generate_content(contents)
-        logger.info(f"Успешный ответ от Gemini: {response.text[:50]}...") # Логируем начало ответа
+        logger.info(f"Успешный ответ от Gemini: {response.text[:50]}...")
 
-        # Сохранение в базу данных
         try:
             session_id = request.cookies.get("session_id", str(uuid.uuid4()))
             user = get_or_create_user(session_id)
@@ -223,6 +231,66 @@ async def analyze_media(request: Request, file: UploadFile = File(...)):
     except Exception as e:
         logger.error(f"Произошла ошибка при анализе файла: {e}")
         raise HTTPException(status_code=500, detail=f"Произошла ошибка при анализе файла: {e}")
+
+@app.post("/chat", response_model=ChatResponse)
+async def chat(request: Request, message: str):
+    """Отправляет сообщение в чат и получает ответ от модели."""
+    try:
+        session_id = request.cookies.get("session_id", str(uuid.uuid4()))
+        user = get_or_create_user(session_id)
+
+        # Создаем новый чат, если его нет
+        chat = supabase.table('chats').select('*').eq('user_id', user['id']).order('created_at.desc').limit(1).execute()
+        if not chat.data:
+            chat = create_chat(user['id'])
+            chat_id = chat.data[0]['id']
+        else:
+            chat_id = chat.data[0]['id']
+
+        # Сохраняем сообщение пользователя
+        save_message(chat_id, 'user', message)
+
+        # Получаем историю сообщений
+        messages = get_chat_messages(chat_id)
+        history = [{"role": msg['role'], "content": msg['content']} for msg in messages.data]
+
+        # Генерируем ответ от модели
+        response = model.generate_content(history + [{"role": "user", "content": message}])
+        ai_response = response.text
+
+        # Сохраняем ответ модели
+        save_message(chat_id, 'assistant', ai_response)
+
+        return ChatResponse(chat_id=chat_id, messages=[
+            ChatMessage(role=msg['role'], content=msg['content']) for msg in messages.data
+        ] + [ChatMessage(role='assistant', content=ai_response)])
+    except Exception as e:
+        logger.error(f"Ошибка при обработке чата: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при обработке чата: {e}")
+
+@app.get("/chat/{chat_id}", response_model=ChatResponse)
+def get_chat(chat_id: str):
+    """Возвращает историю сообщений конкретного чата."""
+    try:
+        messages = get_chat_messages(chat_id)
+        return ChatResponse(chat_id=chat_id, messages=[
+            ChatMessage(role=msg['role'], content=msg['content']) for msg in messages.data
+        ])
+    except Exception as e:
+        logger.error(f"Ошибка при получении истории чата: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при получении истории чата: {e}")
+
+@app.get("/chats", response_model=ChatListResponse)
+def get_chats(request: Request):
+    """Возвращает список всех чатов пользователя."""
+    try:
+        session_id = request.cookies.get("session_id", str(uuid.uuid4()))
+        user = get_or_create_user(session_id)
+        chats = get_user_chats(user['id'])
+        return ChatListResponse(chats=chats.data)
+    except Exception as e:
+        logger.error(f"Ошибка при получении списка чатов: {e}")
+        raise HTTPException(status_code=500, detail=f"Ошибка при получении списка чатов: {e}")
 
 @app.get("/analysis", response_model=AnalysisListResponse)
 def get_analysis_list():
