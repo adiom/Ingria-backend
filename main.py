@@ -198,7 +198,7 @@ async def analyze_media(request: Request, file: UploadFile = File(...)):
                 {"mime_type": file.content_type, "data": file_data}
             ]
         elif file.content_type.startswith("audio/"):
-            prompt_text = "Преобразуй аудио в текст. Отправь и распознанный текст! потом напиши [моё мнение] и прокомментируй текст"
+            prompt_text = "Преобразуй аудио в текст. Отправь и распознанный текст! потом напиши [моё мнение] и ответь как студентка гений на сообщение которое ты распознала"
             contents = [
                 prompt_text,
                 {"mime_type": file.content_type, "data": file_data}
