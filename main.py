@@ -38,7 +38,7 @@ if not all([GOOGLE_API_KEY, SUPABASE_URL, SUPABASE_KEY]):
 genai.configure(api_key=GOOGLE_API_KEY)
 
 # Выбор модели
-model = genai.GenerativeModel('gemini-2.5-pro')
+model = genai.GenerativeModel('gemini-2.5-flash')
 
 # ...existing code...
 
